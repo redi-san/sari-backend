@@ -15,6 +15,8 @@ db.connect((err) => {
 
 module.exports = db; */
 
+require('dotenv').config(); // <-- loads variables from .env
+
 const mysql = require("mysql2");
 
 const db = mysql.createConnection({
