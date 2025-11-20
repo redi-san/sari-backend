@@ -3,13 +3,6 @@ const OrderProduct = require("../models/OrderProduct");
 const User = require("../models/Users");
 const db = require("../config/db");
 
-/*exports.getOrders = (req, res) => {
-  Order.getAll((err, results) => {
-    if (err) return res.status(500).send(err);
-    res.json(results);
-  });
-}; */
-
 exports.getOrders = (req, res) => {
   const sql = `
     SELECT 
@@ -130,52 +123,7 @@ exports.deleteOrder = (req, res) => {
   });
 };
 
-/*exports.updateOrder = (req, res) => {
-  const orderId = req.params.id;
-  const { customer_name, total, profit, products } = req.body;
 
-  db.beginTransaction((err) => {
-    if (err) return res.status(500).json({ error: "Transaction start failed" });
-
-    // Update main order info
-    db.query(
-      "UPDATE orders SET customer_name = ?, total = ?, profit = ? WHERE id = ?",
-      [customer_name, total, profit, orderId],
-      (err2) => {
-        if (err2) return db.rollback(() => res.status(500).json({ error: err2.message }));
-
-        // Delete old products first
-        db.query("DELETE FROM order_products WHERE order_id = ?", [orderId], (err3) => {
-          if (err3) return db.rollback(() => res.status(500).json({ error: err3.message }));
-
-          // Insert updated products
-          const insertValues = products.map(p => [
-            orderId,
-            p.stock_id,
-            p.name,
-            p.quantity,
-            p.selling_price,
-            p.buying_price
-          ]);
-
-          const insertQuery = `
-            INSERT INTO order_products (order_id, stock_id, name, quantity, selling_price, buying_price)
-            VALUES ?
-          `;
-
-          db.query(insertQuery, [insertValues], (err4) => {
-            if (err4) return db.rollback(() => res.status(500).json({ error: err4.message }));
-
-            db.commit((err5) => {
-              if (err5) return db.rollback(() => res.status(500).json({ error: err5.message }));
-              res.json({ success: true });
-            });
-          });
-        });
-      }
-    );
-  });
-}; */
 
 exports.updateOrder = (req, res) => {
   const orderId = req.params.id;
@@ -273,6 +221,62 @@ exports.updateOrder = (req, res) => {
           });
         });
       });
+    });
+  });
+};
+
+exports.getOrdersByUser = (req, res) => {
+  const firebase_uid = req.params.uid;
+
+  if (!firebase_uid) {
+    return res.status(400).json({ error: "firebase_uid is required" });
+  }
+
+  // 1️⃣ Find user_id from firebase_uid
+  const userQuery = "SELECT id FROM users WHERE firebase_uid = ?";
+  db.query(userQuery, [firebase_uid], (err, userResult) => {
+    if (err) return res.status(500).json({ error: "DB error while finding user" });
+    if (userResult.length === 0) return res.status(404).json({ error: "User not found" });
+
+    const user_id = userResult[0].id;
+
+    // 2️⃣ Get that user's orders
+    const sql = `
+      SELECT 
+        o.id, 
+        o.order_number, 
+        o.customer_name, 
+        o.total, 
+        o.profit,
+        COALESCE(
+          JSON_ARRAYAGG(
+            JSON_OBJECT(
+              'name', op.name,
+              'quantity', op.quantity,
+              'selling_price', op.selling_price,
+              'buying_price', op.buying_price
+            )
+          ), '[]'
+        ) AS products
+      FROM orders o
+      LEFT JOIN order_products op ON o.id = op.order_id
+      WHERE o.user_id = ?
+      GROUP BY o.id
+      ORDER BY o.id DESC
+    `;
+
+    db.query(sql, [user_id], (err2, results) => {
+      if (err2) return res.status(500).json({ error: "Error fetching user orders" });
+
+      results.forEach(order => {
+        try {
+          order.products = JSON.parse(order.products);
+        } catch {
+          order.products = [];
+        }
+      });
+
+      res.json(results);
     });
   });
 };

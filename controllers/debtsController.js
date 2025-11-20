@@ -15,6 +15,7 @@ exports.getDebt = (req, res) => {
       d.status,
       d.total,
       d.profit,
+      d.total_paid,
       COALESCE(
   JSON_ARRAYAGG(
     JSON_OBJECT(
@@ -181,9 +182,10 @@ exports.addDebtProducts = (req, res) => {
   const { id } = req.params;
   const { status } = req.body;
 
-  if (!["partial", "paid"].includes(status)) {
-    return res.status(400).json({ error: "Invalid status value" });
-  }
+  if (status !== "paid") {
+  return res.status(400).json({ error: "Invalid status value" });
+}
+
 
   Debt.updateStatus(id, status, (err, result) => {
     if (err) return res.status(500).json({ error: err.message });
@@ -206,98 +208,6 @@ exports.addDebtProducts = (req, res) => {
       });
     });
   });
-
-/*exports.updateDebt = (req, res) => {
-  const { id } = req.params;
-  const {
-    customer_name,
-    contact_number,
-    date,
-    due_date,
-    note,
-    status,
-    total,
-    profit,
-    products,
-  } = req.body;
-
-  // Update debt info first
-  const updateDebtQuery = `
-    UPDATE debts
-    SET customer_name = ?, contact_number = ?, date = ?, due_date = ?, note = ?, status = ?, total = ?, profit = ?
-    WHERE id = ?
-  `;
-
-  db.query(
-    updateDebtQuery,
-    [
-      customer_name,
-      contact_number,
-      date,
-      due_date && due_date.trim() !== "" ? due_date : null, // ✅ convert '' → null
-      note,
-      status,
-      total,
-      profit,
-      id,
-    ],
-
-    (err) => {
-      if (err) {
-        console.error("Error updating debt:", err);
-        return res.status(500).json({ error: "Failed to update debt info" });
-      }
-
-      // Replace products (delete old and insert new)
-      db.query(
-        "DELETE FROM debt_products WHERE debt_id = ?",
-        [id],
-        (delErr) => {
-          if (delErr) {
-            console.error("Error deleting old products:", delErr);
-            return res
-              .status(500)
-              .json({ error: "Failed to reset old products" });
-          }
-
-          if (!products || products.length === 0) {
-            return res.json({
-              message: "Debt updated successfully (no products)",
-            });
-          }
-
-          const insertValues = products.map((p) => [
-            id,
-            p.stock_id || null,
-            p.name,
-            p.quantity,
-            p.selling_price,
-            p.buying_price,
-            p.dateAdded || new Date().toISOString().split("T")[0],
-          ]);
-
-          const insertQuery = `
-  INSERT INTO debt_products (debt_id, stock_id, name, quantity, selling_price, buying_price, date_added)
-  VALUES ?
-`; 
-
-          db.query(insertQuery, [insertValues], (insertErr) => {
-            if (insertErr) {
-              console.error("❌ SQL Insert failed:", insertErr.sqlMessage);
-              console.error("❌ Data sent:", insertValues);
-              return res.status(500).json({
-                error:
-                  insertErr.sqlMessage || "Failed to insert updated products",
-              });
-            }
-
-            res.json({ message: "✅ Debt and products updated successfully" });
-          });
-        }
-      );
-    }
-  );
-}; */
 
 exports.updateDebt = (req, res) => {
   const { id } = req.params;
@@ -453,5 +363,109 @@ exports.updateDebt = (req, res) => {
       );
     }
   );
+};
+
+exports.getDebtsByUser = (req, res) => {
+  const firebase_uid = req.params.uid;
+
+  if (!firebase_uid) {
+    return res.status(400).json({ error: "Firebase UID is required" });
+  }
+
+  const userQuery = "SELECT id FROM users WHERE firebase_uid = ?";
+  db.query(userQuery, [firebase_uid], (err, userRows) => {
+    if (err) return res.status(500).json({ error: "DB error while fetching user" });
+    if (userRows.length === 0) return res.status(404).json({ error: "User not found" });
+
+    const user_id = userRows[0].id;
+
+    const sql = `
+      SELECT 
+        d.id, d.customer_name, d.contact_number, d.date, d.due_date,
+        d.note, d.status, d.total, d.profit, d.total_paid,
+        COALESCE(
+          JSON_ARRAYAGG(
+            JSON_OBJECT(
+              'id', dp.id,
+              'stock_id', dp.stock_id,
+              'name', dp.name,
+              'quantity', dp.quantity,
+              'selling_price', dp.selling_price,
+              'buying_price', dp.buying_price,
+              'dateAdded', dp.date_added
+            )
+          ), '[]'
+        ) AS products
+      FROM debts d
+      LEFT JOIN debt_products dp ON d.id = dp.debt_id
+      WHERE d.user_id = ?
+      GROUP BY d.id
+      ORDER BY d.id DESC
+    `;
+
+    db.query(sql, [user_id], (err2, results) => {
+      if (err2) return res.status(500).json({ error: "Error fetching debts" });
+
+      results.forEach((debt) => {
+        try {
+          debt.products = JSON.parse(debt.products);
+        } catch {
+          debt.products = [];
+        }
+        if (debt.date) debt.date = new Date(debt.date).toLocaleDateString("en-CA");
+        if (debt.due_date) debt.due_date = new Date(debt.due_date).toLocaleDateString("en-CA");
+      });
+
+      res.json(results);
+    });
+  });
+};
+
+exports.addPayment = (req, res) => {
+  const { id } = req.params; // debt id
+  const { amount } = req.body;
+
+  if (!amount || amount <= 0) {
+    return res.status(400).json({ error: "Invalid payment amount" });
+  }
+
+  // ✅ Insert payment record
+  const insertPayment = `
+    INSERT INTO debt_payments (debt_id, amount) VALUES (?, ?)
+  `;
+
+  db.query(insertPayment, [id, amount], (err) => {
+    if (err) {
+      console.error("Error adding payment:", err);
+      return res.status(500).json({ error: "Failed to record payment" });
+    }
+
+    // ✅ Update debt's total_paid and status
+const updateDebtStatus = `
+  UPDATE debts d
+  JOIN (
+    SELECT debt_id, SUM(amount) AS total_paid 
+    FROM debt_payments 
+    WHERE debt_id = ? 
+    GROUP BY debt_id
+  ) p ON d.id = p.debt_id
+  SET 
+    d.total_paid = p.total_paid,
+    d.status = CASE 
+      WHEN p.total_paid >= d.total THEN 'Paid'
+      ELSE d.status
+    END
+  WHERE d.id = ?;
+`;
+
+    db.query(updateDebtStatus, [id, id], (err2) => {
+      if (err2) {
+        console.error("Error updating debt status:", err2);
+        return res.status(500).json({ error: "Failed to update debt status" });
+      }
+
+      res.json({ message: "Payment recorded successfully!" });
+    });
+  });
 };
 

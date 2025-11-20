@@ -1,13 +1,15 @@
-const User = require("../models/Users"); 
+const User = require("../models/Users");
+const db = require("../config/db");
+
 
 exports.registerUser = (req, res) => {
-  const { firebase_uid, name, email} = req.body;
+  const { firebase_uid, name, last_name, email } = req.body;
 
   if (!firebase_uid || !email) {
     return res.status(400).json({ error: "Firebase UID and email required" });
   }
 
-  User.create({ firebase_uid, name, email }, (err, result) => {
+  User.create({ firebase_uid, name, last_name, email }, (err, result) => {
     if (err) {
       if (err.code === "ER_DUP_ENTRY") {
         return res.status(409).json({ error: "User already exists" });
@@ -23,7 +25,21 @@ exports.getUser = (req, res) => {
 
   User.findbyUid(uid, (err, rows) => {
     if (err) return res.status(500).json({ error: "Failed to fetch user" });
-    if (rows.length === 0) return res.status(404).json({ error: "User not found" });
+    if (rows.length === 0)
+      return res.status(404).json({ error: "User not found" });
     res.json(rows[0]);
   });
 };
+
+exports.updateUser = (req, res) => {
+  const { uid } = req.params;
+  const { name, last_name, email } = req.body;
+
+  const query = "UPDATE users SET name = ?, last_name = ?, email = ? WHERE firebase_uid = ?";
+  db.query(query, [name, last_name, email, uid], (err, result) => {
+    if (err) return res.status(500).json({ error: "Failed to update user" });
+    if (result.affectedRows === 0) return res.status(404).json({ error: "User not found" });
+    res.json({ message: "User updated successfully" });
+  });
+};
+

@@ -1,8 +1,9 @@
 const express = require("express");
-//const { getOrders, getOrderById, createOrder, deleteOrder } = require("../controllers/ordersController");
-const { getOrders, getOrderById, createOrder, deleteOrder, updateOrder } = require("../controllers/ordersController");
+const { getOrders, getOrdersByUser, getOrderById, createOrder, deleteOrder, updateOrder } = require("../controllers/ordersController");
 
 const router = express.Router();
+
+router.get("/user/:uid", getOrdersByUser);
 
 router.get("/", getOrders);
 router.get("/:id", getOrderById);
